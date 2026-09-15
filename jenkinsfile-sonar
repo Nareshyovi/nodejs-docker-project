@@ -9,7 +9,7 @@ pipeline {
         SCANNER_HOME = tool 'SonarScanner'   // Name must match your SonarQube Scanner installation
         DOCKERHUB_CREDS = credentials('dockerhub-creds')  // Credential ID from Manage Jenkins > Credentials (kind: Username with password)
         IMAGE_NAME = "nareshyovi/node-app"
-        IMAGE_TAG = "v${BUILD_NUMBER}"
+        IMAGE_TAG = "V${BUILD_NUMBER}"
     }
 
     stages {

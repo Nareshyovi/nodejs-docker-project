@@ -1,0 +1,83 @@
+pipeline {
+    agent any
+
+    tools {
+        nodejs 'Node18'   // Name must match your NodeJS installation under Manage Jenkins > Tools
+    }
+
+    environment {
+        SCANNER_HOME = tool 'SonarScanner'   // Name must match your SonarQube Scanner installation
+        DOCKERHUB_CREDS = credentials('dockerhub-creds')  // Credential ID from Manage Jenkins > Credentials (kind: Username with password)
+        IMAGE_NAME = "nareshyovi/node-app"
+        IMAGE_TAG = "v${BUILD_NUMBER}"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/Nareshyovi/nodejs-docker-project.git'
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm install'
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                // Remove or adjust if you don't have a test script with coverage yet
+                sh 'npm test -- --coverage || true'
+            }
+        }
+        
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('MySonarQube') {   // Name must match your SonarQube server config under Manage Jenkins > System
+                    sh """
+                        ${SCANNER_HOME}/bin/sonar-scanner \
+                        -Dsonar.projectKey=nodejs-docker-project \
+                        -Dsonar.sources=. \
+                        -Dsonar.exclusions=node_modules/**,coverage/** \
+                        -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+                    """
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t $IMAGE_NAME:$IMAGE_TAG .'
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                sh """
+                    echo \$DOCKERHUB_CREDS_PSW | docker login -u \$DOCKERHUB_CREDS_USR --password-stdin
+                    docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                    docker logout
+                """
+            }
+        }
+    }
+    post {
+        success {
+            echo 'Build, analysis, and quality gate all passed.'
+        }
+        failure {
+            echo 'Pipeline failed — check the stage logs above.'
+        }
+    }
+}

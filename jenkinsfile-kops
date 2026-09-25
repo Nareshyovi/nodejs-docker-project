@@ -1,1 +1,40 @@
+pipeline {
+    agent any
 
+    environment {
+        KUBECONFIG = credentials('kops')
+        DOCKERHUB_CREDS = credentials('dockerhub-creds')
+        IMAGE_NAME = "nareshyovi/node-app"
+        IMAGE_TAG = "V${BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Clone') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Nareshyovi/nodejs-docker-project.git'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t $IMAGE_NAME:$IMAGE_TAG .'
+            }
+        }
+
+        stage('Push Image') {
+            steps {
+                sh """
+                    echo \$DOCKERHUB_CREDS_PSW | docker login -u \$DOCKERHUB_CREDS_USR --password-stdin
+                    docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                    docker logout
+                """
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                sh "kubectl set image deployment/node-app node-app=${IMAGE_NAME}:${IMAGE_TAG}"
+            }
+        }
+    }
+}

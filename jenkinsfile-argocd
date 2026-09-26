@@ -1,1 +1,49 @@
+pipeline {
+    agent any
 
+    environment {
+        DOCKERHUB_CREDS = credentials('dockerhub-creds')
+        GIT_CREDS = credentials('github-creds')
+        IMAGE_NAME = "nareshyovi/node-app"
+        IMAGE_TAG = "V${BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Clone App Repo') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Nareshyovi/nodejs-docker-project.git'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t $IMAGE_NAME:$IMAGE_TAG .'
+            }
+        }
+
+        stage('Push Image') {
+            steps {
+                sh """
+                    echo \$DOCKERHUB_CREDS_PSW | docker login -u \$DOCKERHUB_CREDS_USR --password-stdin
+                    docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                    docker logout
+                """
+            }
+        }
+
+        stage('Update Helm Values') {
+    steps {
+        sh """
+            rm -rf helmchart
+            git clone https://github.com/Nareshyovi/helmchart.git
+            cd helmchart
+            sed -i "s/tag: .*/tag: \\"${IMAGE_TAG}\\"/" values.yaml
+            git config user.email "jenkins@ci.local"
+            git config user.name "Jenkins CI"
+            git commit -am "Update image tag to ${IMAGE_TAG}"
+            git push https://\$GIT_CREDS_USR:\$GIT_CREDS_PSW@github.com/Nareshyovi/helmchart.git main
+        """
+    }
+}
+    }
+}

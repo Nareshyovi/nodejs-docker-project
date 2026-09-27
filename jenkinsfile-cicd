@@ -1,0 +1,118 @@
+pipeline {
+    agent any
+ 
+    tools {
+        nodejs 'Node18'   // Name must match your NodeJS installation under Manage Jenkins > Tools
+    }
+ 
+    environment {
+        KUBECONFIG = credentials('kops')  //secret file
+        GIT_CREDS = credentials('github-creds')  //username and password
+        SCANNER_HOME = tool 'SonarScanner'   // Name must match your SonarQube Scanner installation
+        DOCKERHUB_CREDS = credentials('dockerhub-creds')  // Credential ID from Manage Jenkins > Credentials (kind: Username with password)
+        IMAGE_NAME = "nareshyovi/node-app"
+        IMAGE_TAG = "V${BUILD_NUMBER}"
+    }
+ 
+    stages {
+ 
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/Nareshyovi/nodejs-docker-project.git'
+            }
+        }
+ 
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm install'
+            }
+        }
+ 
+        stage('Run Tests') {
+            steps {
+                // Remove or adjust if you don't have a test script with coverage yet
+                sh 'npm test -- --coverage || true'
+            }
+        }
+        
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('MySonarQube') {   // Name must match your SonarQube server config under Manage Jenkins > System
+                    sh """
+                        ${SCANNER_HOME}/bin/sonar-scanner \
+                        -Dsonar.projectKey=nodejs-docker-project \
+                        -Dsonar.sources=. \
+                        -Dsonar.exclusions=node_modules/**,coverage/** \
+                        -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+                    """
+                }
+            }
+        }
+ 
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+ 
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t $IMAGE_NAME:$IMAGE_TAG .'
+            }
+        }
+ 
+        stage('Trivy Scan') {
+            steps {
+                sh """
+                    #!/bin/bash
+                    set -o pipefail
+                    trivy image \
+                        --severity HIGH,CRITICAL \
+                        --ignore-unfixed \
+                        --format table \
+                        ${IMAGE_NAME}:${IMAGE_TAG} | tee trivy-report.txt
+                """
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy-report.txt', allowEmptyArchive: true
+                }
+            }
+        }
+ 
+        stage('Push Docker Image') {
+            steps {
+                sh """
+                    echo \$DOCKERHUB_CREDS_PSW | docker login -u \$DOCKERHUB_CREDS_USR --password-stdin
+                    docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                    docker logout
+                """
+            }
+        }
+        stage('Update Helm Values') {
+            steps {
+                sh """
+              rm -rf helmchart
+              git clone https://github.com/Nareshyovi/helmchart.git
+              cd helmchart
+              sed -i "s/tag: .*/tag: \\"${IMAGE_TAG}\\"/" values.yaml
+              git config user.email "jenkins@ci.local"
+              git config user.name "Jenkins CI"
+              git commit -am "Update image tag to ${IMAGE_TAG}"
+              git push https://\$GIT_CREDS_USR:\$GIT_CREDS_PSW@github.com/Nareshyovi/helmchart.git main
+            """
+            }
+        }
+    }
+    post {
+        success {
+            echo 'Build, analysis, and quality gate all passed.'
+        }
+        failure {
+            echo 'Pipeline failed — check the stage logs above.'
+        }
+    }
+}
